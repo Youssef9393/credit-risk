@@ -4,6 +4,15 @@ Complete Data Science & MLOps Solution for Banking and Finance:
 An end-to-end intelligent platform integrating **Credit Scoring**, **Fraud Detection**, **Customer Segmentation**, **Financial NLP**, and **Stock Market Forecasting**, featuring interactive dashboards, RESTful APIs, automated MLOps pipelines, and containerized deployment with Docker and Kubernetes.
 
 ## Demo Video
+<img width="1886" height="692" alt="Screenshot 2026-07-18 154101" src="https://github.com/user-attachments/assets/6052a3d2-cb46-45d7-b663-4c0a1cc0b5d4" />
+<img width="1876" height="862" alt="Screenshot 2026-07-18 154132" src="https://github.com/user-attachments/assets/b81953ea-81e9-49fd-800e-2795f1878d44" />
+<img width="1880" height="564" alt="Screenshot 2026-07-18 154159" src="https://github.com/user-attachments/assets/b023da4c-4deb-4c88-91d1-e82c46e083be" />
+<img width="1879" height="839" alt="Screenshot 2026-07-18 154220" src="https://github.com/user-attachments/assets/bd19655d-a1ff-4a1a-8ea2-279a1f00b90a" />
+<img width="1865" height="702" alt="Screenshot 2026-07-18 154434" src="https://github.com/user-attachments/assets/132308d5-c648-40a3-b07e-e55128fbca11" />
+
+
+
+
 
 ## Project Structure
 
