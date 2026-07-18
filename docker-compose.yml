@@ -20,7 +20,7 @@ services:
       - "8501:8501"
     volumes:
       - ./models:/app/models
-      - ./data:/app/data
+      - ./data:/app/data   # inclut platform.db (base SQLite persistée sur l'hôte)
     depends_on:
       - api
     restart: unless-stopped

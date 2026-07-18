@@ -1,12 +1,13 @@
 """
-Dashboard Streamlit - Plateforme Intelligente de Risque Crédit
-==================================================================
+Centre de Décision - Plateforme de Risque Crédit, Fraude & Marchés
+========================================================================
 Lancer avec :
     streamlit run dashboard/app_streamlit.py
 """
 
 import sys
 from pathlib import Path
+from datetime import datetime
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import joblib
@@ -15,483 +16,621 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from streamlit_option_menu import option_menu
+
+import theme
+import database as db
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 MODEL_DIR = BASE_DIR / "models"
 DATA_DIR = BASE_DIR / "data" / "raw"
 
-st.set_page_config(page_title="Plateforme Risque Crédit & Fraude", layout="wide", page_icon="▮")
+st.set_page_config(page_title="Centre de Décision — Risque & Marchés", layout="wide",
+                    initial_sidebar_state="expanded")
+
+db.initialize_platform_db()
 
 # ---------------------------------------------------------------------------
-# SESSION STATE
+# Thème (bascule clair / sombre)
 # ---------------------------------------------------------------------------
-st.session_state.setdefault("theme", "dark")
-st.session_state.setdefault("nav_page", "Tableau de bord")
+if "theme_mode" not in st.session_state:
+    st.session_state.theme_mode = "dark"
 
-PAGES = ["Tableau de bord", "Credit Scoring", "Détection de fraude",
-         "Segmentation clients", "Sentiment financier", "Prévision boursière"]
+theme.inject_css(st.session_state.theme_mode)
+P = theme.PALETTE[st.session_state.theme_mode]
 
-# ---------------------------------------------------------------------------
-# ICONS (inline SVG, no emoji — one distinct glyph per business domain)
-# ---------------------------------------------------------------------------
-ICONS = {
-    "dashboard": '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>',
-    "credit": '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/><path d="M7 15h4"/></svg>',
-    "fraud": '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/><path d="M9.5 12l1.8 1.8 3.2-3.6"/></svg>',
-    "cluster": '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="7" r="2.4"/><circle cx="16" cy="17" r="3"/><circle cx="7" cy="17" r="2.2"/></svg>',
-    "nlp": '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 5h16v10H9l-4 4V5z"/><path d="M8 9h8M8 12h5"/></svg>',
-    "stock": '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 17l6-6 4 4 8-9"/><path d="M15 6h6v6"/></svg>',
-    "bell": '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>',
+MODEL_STATUS = {
+    "Octroi de Crédit": MODEL_DIR / "credit_scoring_model.joblib",
+    "Surveillance des Transactions": MODEL_DIR / "fraud_xgboost.joblib",
+    "Segmentation Clientèle": MODEL_DIR / "clustering_model.joblib",
+    "Veille des Marchés": MODEL_DIR / "nlp_sentiment_baseline.joblib",
+    "Prévision Financière": MODEL_DIR / "lstm_stock_forecaster.pt",
 }
 
 # ---------------------------------------------------------------------------
-# THEME TOKENS — azur profond (dark) / azur clair (light)
-# ---------------------------------------------------------------------------
-THEME = {
-    "dark": dict(bg="#061B33", panel="#0B2545", panel_alt="#0F2E52", line="#1E3D63",
-                 text_hi="#EAF2FB", text_lo="#8FB0D6", accent="#2EA0FF", accent_ink="#04121F",
-                 ok="#3FCB99", warn="#E7B24F", bad="#F1667C"),
-    "light": dict(bg="#F2F7FC", panel="#FFFFFF", panel_alt="#E9F2FB", line="#D6E4F2",
-                  text_hi="#0B2545", text_lo="#5D7C9E", accent="#0B76D1", accent_ink="#FFFFFF",
-                  ok="#1F8F6D", warn="#B4740B", bad="#C23B4B"),
-}
-t = THEME[st.session_state.theme]
-
-st.markdown(f"""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
-
-html, body, [class*="css"], .stMarkdown, p, span {{ font-family: 'Inter', sans-serif; }}
-.stApp {{ background: {t['bg']}; color: {t['text_hi']}; }}
-section.main > div {{ padding-top: 1rem; }}
-
-/* Header */
-.platform-header {{
-    display:flex; justify-content:space-between; align-items:center;
-    border-bottom:1px solid {t['line']}; padding-bottom:16px; margin-bottom:22px; flex-wrap:wrap; gap:12px;
-}}
-.platform-title {{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:1.7rem; letter-spacing:-0.02em; margin:0; color:{t['text_hi']}; }}
-.platform-sub {{ font-family:'IBM Plex Mono',monospace; font-size:0.72rem; color:{t['text_lo']}; letter-spacing:0.05em; text-transform:uppercase; margin-top:5px; }}
-
-/* Sidebar / nav */
-[data-testid="stSidebar"] {{ background:{t['panel']}; border-right:1px solid {t['line']}; }}
-[data-testid="stSidebar"] * {{ color:{t['text_hi']}; }}
-.sb-title {{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:1.05rem; margin-bottom:2px; }}
-.sb-sub {{ font-family:'IBM Plex Mono',monospace; font-size:0.65rem; color:{t['text_lo']}; letter-spacing:0.08em; text-transform:uppercase; margin-bottom:18px; }}
-[data-testid="stSidebar"] .stRadio > label {{ display:none; }}
-[data-testid="stSidebar"] .stRadio [role="radiogroup"] {{ gap:2px; }}
-[data-testid="stSidebar"] .stRadio [role="radiogroup"] label {{
-    background:transparent; border-radius:4px; padding:9px 10px; font-family:'IBM Plex Mono',monospace;
-    font-size:0.82rem; letter-spacing:0.01em; border:1px solid transparent;
-}}
-[data-testid="stSidebar"] .stRadio [role="radiogroup"] label:hover {{ background:{t['panel_alt']}; }}
-[data-testid="stSidebar"] .stRadio [aria-checked="true"] {{
-    background:{t['panel_alt']} !important; border:1px solid {t['line']} !important; color:{t['accent']} !important;
-}}
-
-/* KPI / module cards */
-.kpi-card {{
-    background:{t['panel']}; border:1px solid {t['line']}; border-radius:8px; padding:18px 20px;
-    transition:border-color .15s ease, transform .15s ease;
-}}
-.kpi-card:hover {{ border-color:{t['accent']}; transform:translateY(-2px); }}
-.kpi-top {{ display:flex; align-items:center; gap:10px; color:{t['text_lo']}; }}
-.kpi-name {{ font-family:'IBM Plex Mono',monospace; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; }}
-.kpi-metric {{ font-family:'Space Grotesk',sans-serif; font-size:1.18rem; font-weight:600; margin:12px 0 4px 0; color:{t['text_hi']}; }}
-.status-line {{ display:flex; align-items:center; gap:7px; font-family:'IBM Plex Mono',monospace; font-size:0.72rem; color:{t['text_lo']}; }}
-.dot {{ width:6px; height:6px; border-radius:50%; flex-shrink:0; }}
-.dot-ok {{ background:{t['ok']}; box-shadow:0 0 6px {t['ok']}; }}
-.dot-warn {{ background:{t['warn']}; box-shadow:0 0 6px {t['warn']}; }}
-.dot-bad {{ background:{t['bad']}; box-shadow:0 0 6px {t['bad']}; }}
-
-/* Résumé bar inside module pages */
-.summary-bar {{
-    display:flex; align-items:center; gap:10px; background:{t['panel']}; border:1px solid {t['line']};
-    border-left:3px solid {t['accent']}; border-radius:6px; padding:12px 16px; margin-bottom:22px;
-    font-family:'IBM Plex Mono',monospace; font-size:0.82rem; color:{t['text_hi']};
-}}
-
-.panel-label {{
-    font-family:'IBM Plex Mono',monospace; font-size:0.7rem; text-transform:uppercase; letter-spacing:0.08em;
-    color:{t['text_lo']}; margin:4px 0 14px 0; border-bottom:1px solid {t['line']}; padding-bottom:8px;
-}}
-
-div[data-testid="stVerticalBlockBorderWrapper"] {{ background:{t['panel']}; border:1px solid {t['line']} !important; border-radius:8px; }}
-
-.stButton > button {{
-    font-family:'IBM Plex Mono',monospace; font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em;
-    background:{t['accent']}; color:{t['accent_ink']}; border:none; border-radius:4px; padding:9px 18px; font-weight:600;
-}}
-.stButton > button:hover {{ opacity:0.87; color:{t['accent_ink']}; }}
-.stButton > button:focus:not(:active) {{ color:{t['accent_ink']}; }}
-button[kind="secondary"] {{ background:transparent !important; color:{t['accent']} !important; border:1px solid {t['line']} !important; }}
-
-.stNumberInput input, .stTextArea textarea {{
-    font-family:'IBM Plex Mono',monospace !important; background:{t['panel_alt']} !important;
-    color:{t['text_hi']} !important; border:1px solid {t['line']} !important; border-radius:4px !important;
-}}
-label, .stSlider label, .stNumberInput label, .stTextArea label {{
-    font-family:'IBM Plex Mono',monospace !important; font-size:0.72rem !important; text-transform:uppercase;
-    letter-spacing:0.03em; color:{t['text_lo']} !important;
-}}
-[data-testid="stMetricValue"] {{ font-family:'IBM Plex Mono',monospace; color:{t['accent']}; }}
-[data-testid="stMetricLabel"] {{ font-family:'IBM Plex Mono',monospace; text-transform:uppercase; font-size:0.7rem; color:{t['text_lo']}; }}
-.stAlert {{ border-radius:6px; font-family:'Inter',sans-serif; border:1px solid {t['line']}; }}
-hr {{ border-color:{t['line']} !important; }}
-[data-testid="stDataFrame"] {{ border:1px solid {t['line']}; border-radius:6px; }}
-</style>
-""", unsafe_allow_html=True)
-
-PLOTLY_TEMPLATE = go.layout.Template(
-    layout=go.Layout(
-        paper_bgcolor=t["panel"], plot_bgcolor=t["panel"],
-        font=dict(family="IBM Plex Mono, monospace", color=t["text_hi"], size=12),
-        colorway=[t["accent"], t["warn"], t["bad"], t["text_lo"], t["ok"]],
-        xaxis=dict(gridcolor=t["line"], zerolinecolor=t["line"]),
-        yaxis=dict(gridcolor=t["line"], zerolinecolor=t["line"]),
-        legend=dict(bgcolor="rgba(0,0,0,0)"),
-    )
-)
-
-# ---------------------------------------------------------------------------
-# BUSINESS KPIs — computed from real artifacts where available
-# ---------------------------------------------------------------------------
-credit_ready = (MODEL_DIR / "credit_scoring_model.joblib").exists()
-fraud_ready = (MODEL_DIR / "fraud_xgboost.joblib").exists()
-nlp_ready = (MODEL_DIR / "nlp_sentiment_baseline.joblib").exists()
-
-seg_path = BASE_DIR / "data" / "customer_segments.csv"
-stock_path = DATA_DIR / "stock_prices.csv"
-
-if seg_path.exists():
-    _df_seg = pd.read_csv(seg_path)
-    cluster_metric = f"{_df_seg['segment_name'].nunique()} segments actifs"
-    cluster_sub = f"{len(_df_seg)} clients classés"
-else:
-    cluster_metric, cluster_sub = "Segmentation indisponible", "Données non chargées"
-
-if stock_path.exists():
-    _df_stock = pd.read_csv(stock_path, parse_dates=["Date"])
-    _last, _prev = _df_stock["Close"].iloc[-1], _df_stock["Close"].iloc[-2]
-    _pct = (_last - _prev) / _prev * 100
-    _arrow = "▲" if _pct >= 0 else "▼"
-    lstm_metric = f"Tendance {_arrow} {_pct:+.2f}%"
-    lstm_sub = f"Dernière clôture : {_last:,.2f}"
-else:
-    _pct = 0.0
-    lstm_metric, lstm_sub = "Cours indisponible", "Données non chargées"
-
-MODULES = [
-    dict(key="credit", page="Credit Scoring", label="Credit Scoring", ready=credit_ready,
-         metric="Notation de dossiers", sub="Modèle prêt à évaluer" if credit_ready else "Modèle non entraîné",
-         action="Évaluer un dossier"),
-    dict(key="fraud", page="Détection de fraude", label="Détection de fraude", ready=fraud_ready,
-         metric="Surveillance transactionnelle", sub="Contrôle en temps réel actif" if fraud_ready else "Modèle non entraîné",
-         action="Contrôler une transaction"),
-    dict(key="cluster", page="Segmentation clients", label="Segmentation clients", ready=seg_path.exists(),
-         metric=cluster_metric, sub=cluster_sub, action="Explorer les segments"),
-    dict(key="nlp", page="Sentiment financier", label="Sentiment financier", ready=nlp_ready,
-         metric="Lecture des actualités", sub="Moteur prêt à analyser" if nlp_ready else "Modèle non entraîné",
-         action="Analyser une actualité"),
-    dict(key="stock", page="Prévision boursière", label="Prévision boursière", ready=stock_path.exists(),
-         metric=lstm_metric, sub=lstm_sub, action="Voir la prévision"),
-]
-
-NOTIFICATIONS = []
-for m in MODULES:
-    if not m["ready"]:
-        NOTIFICATIONS.append(("warn", f"{m['label']} — {m['sub']}"))
-if stock_path.exists() and _pct <= -2:
-    NOTIFICATIONS.append(("bad", f"Prévision boursière — repli marqué de {_pct:.2f}% sur la dernière séance"))
-if not NOTIFICATIONS:
-    NOTIFICATIONS.append(("ok", "Aucune alerte critique en attente"))
-
-# ---------------------------------------------------------------------------
-# SIDEBAR — navigation unique + statut métier + apparence
+# Barre latérale : navigation unique + bascule de thème
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.markdown('<div class="sb-title">Plateforme Risque</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sb-sub">Crédit · Fraude · Marché</div>', unsafe_allow_html=True)
-
-    light_mode = st.toggle("Mode clair", value=(st.session_state.theme == "light"))
-    new_theme = "light" if light_mode else "dark"
-    if new_theme != st.session_state.theme:
-        st.session_state.theme = new_theme
-        st.rerun()
-
-    st.session_state.nav_page = st.radio(
-        "Navigation", PAGES, index=PAGES.index(st.session_state.nav_page), key="nav_radio",
-        label_visibility="collapsed",
-    )
-
-    st.markdown("<div style='height:22px;'></div>", unsafe_allow_html=True)
-    st.markdown('<div class="sb-sub">Statut des modules</div>', unsafe_allow_html=True)
-    for m in MODULES:
-        dot = "dot-ok" if m["ready"] else "dot-warn"
-        st.markdown(
-            f'<div class="status-line"><span class="dot {dot}"></span>{m["label"]} — {m["sub"]}</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
-
-page = st.session_state.nav_page
-
-# ---------------------------------------------------------------------------
-# HEADER (with notification center)
-# ---------------------------------------------------------------------------
-n_alerts = sum(1 for lvl, _ in NOTIFICATIONS if lvl != "ok")
-head_l, head_r = st.columns([5, 1])
-with head_l:
     st.markdown(f"""
-    <div class="platform-header" style="border-bottom:none; margin-bottom:0; padding-bottom:0;">
-        <div>
-            <p class="platform-title">{page}</p>
-            <p class="platform-sub">Credit Scoring · Détection de fraude · Segmentation client · NLP financier · Prévision boursière</p>
+    <div style="padding: 0.4rem 0.2rem 1.1rem 0.2rem;">
+        <div style="font-size:1.05rem; font-weight:800; color:{P['text_primary']};">
+            Centre de Décision
+        </div>
+        <div style="font-size:0.75rem; color:{P['text_secondary']};">
+            Risque Crédit · Fraude · Marchés
         </div>
     </div>
     """, unsafe_allow_html=True)
-with head_r:
-    try:
-        with st.popover(f"Alertes ({n_alerts})" if n_alerts else "Alertes"):
-            for lvl, msg in NOTIFICATIONS:
-                dot = {"ok": "dot-ok", "warn": "dot-warn", "bad": "dot-bad"}[lvl]
-                st.markdown(f'<div class="status-line"><span class="dot {dot}"></span>{msg}</div>',
-                            unsafe_allow_html=True)
-    except AttributeError:
-        with st.expander(f"Alertes ({n_alerts})"):
-            for lvl, msg in NOTIFICATIONS:
-                dot = {"ok": "dot-ok", "warn": "dot-warn", "bad": "dot-bad"}[lvl]
-                st.markdown(f'<div class="status-line"><span class="dot {dot}"></span>{msg}</div>',
-                            unsafe_allow_html=True)
-st.markdown(f"<div style='border-bottom:1px solid {t['line']}; margin:14px 0 24px 0;'></div>", unsafe_allow_html=True)
+
+    selected = option_menu(
+        menu_title=None,
+        options=["Accueil", "Octroi de Crédit", "Surveillance des Transactions",
+                 "Segmentation Clientèle", "Veille des Marchés", "Prévision Financière"],
+        icons=["speedometer2", "credit-card", "shield-check", "people", "newspaper", "graph-up-arrow"],
+        default_index=0,
+        styles={
+            "container": {"padding": "0", "background-color": "transparent"},
+            "icon": {"color": P["accent_light"], "font-size": "15px"},
+            "nav-link": {
+                "font-size": "0.86rem", "font-weight": "500", "color": P["text_secondary"],
+                "border-radius": "9px", "margin": "3px 0", "padding": "0.55rem 0.8rem",
+            },
+            "nav-link-selected": {
+                "background-color": P["accent_soft"], "color": P["text_primary"], "font-weight": "600",
+            },
+        },
+    )
+
+    st.markdown("<div style='margin-top:1.4rem;'></div>", unsafe_allow_html=True)
+    st.caption("Apparence")
+    mode_choice = st.radio("Apparence", ["Sombre", "Claire"], horizontal=True, label_visibility="collapsed",
+                            index=0 if st.session_state.theme_mode == "dark" else 1)
+    new_mode = "dark" if mode_choice == "Sombre" else "light"
+    if new_mode != st.session_state.theme_mode:
+        st.session_state.theme_mode = new_mode
+        st.rerun()
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.caption("État des services")
+    for name, path in MODEL_STATUS.items():
+        level = "ok" if path.exists() else "critical"
+        label = "Opérationnel" if path.exists() else "Indisponible"
+        st.markdown(theme.status_pill(f"{name} — {label}", level), unsafe_allow_html=True)
+        st.markdown("<div style='margin-bottom:6px;'></div>", unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------------------------
-# PAGE : TABLEAU DE BORD
+# PAGE : ACCUEIL — Tableau de bord de décision
 # ---------------------------------------------------------------------------
-if page == "Tableau de bord":
-    st.markdown('<div class="panel-label">Vue d\'ensemble — indicateurs métiers</div>', unsafe_allow_html=True)
-    cols = st.columns(len(MODULES))
-    for col, m in zip(cols, MODULES):
-        with col:
-            dot = "dot-ok" if m["ready"] else "dot-warn"
-            st.markdown(f"""
-            <div class="kpi-card">
-                <div class="kpi-top">{ICONS[m['key']]}<span class="kpi-name">{m['label']}</span></div>
-                <div class="kpi-metric">{m['metric']}</div>
-                <div class="status-line"><span class="dot {dot}"></span>{m['sub']}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            if st.button(m["action"], key=f"go_{m['key']}", use_container_width=True):
-                st.session_state.nav_page = m["page"]
-                st.rerun()
+def render_home():
+    theme.page_header(
+        "Vue d'ensemble",
+        f"Dernière actualisation — {datetime.now().strftime('%d %B %Y, %H:%M')}",
+    )
 
-    st.write("")
-    st.markdown('<div class="panel-label">Tendance boursière récente</div>', unsafe_allow_html=True)
-    if stock_path.exists():
-        fig = px.line(_df_stock.tail(120), x="Date", y="Close")
-        fig.update_traces(line_color=t["accent"])
-        fig.update_layout(template=PLOTLY_TEMPLATE, height=300, margin=dict(t=10, b=30, l=40, r=20))
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Données boursières non chargées. Lancez `python src/data_generation.py`.")
+    kpis = db.get_kpis()
 
-# ---------------------------------------------------------------------------
-# PAGE : CREDIT SCORING
-# ---------------------------------------------------------------------------
-elif page == "Credit Scoring":
-    st.markdown(f'<div class="summary-bar">{ICONS["credit"]}&nbsp; {"Modèle de notation actif — prêt à évaluer un dossier" if credit_ready else "Modèle de notation non entraîné"}</div>', unsafe_allow_html=True)
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(theme.kpi_card(
+            "Dossiers de crédit en attente", f"{kpis['pending_credit_applications']}",
+            "à instruire"), unsafe_allow_html=True)
+    with c2:
+        st.markdown(theme.kpi_card(
+            "Alertes critiques", f"{kpis['critical_fraud_alerts']}",
+            "transactions suspectes non vérifiées"), unsafe_allow_html=True)
+    with c3:
+        sentiment_label = {"positive": "Favorable", "negative": "Défavorable", "neutral": "Neutre"}.get(
+            kpis["dominant_sentiment"], "—")
+        st.markdown(theme.kpi_card(
+            "Climat de marché", sentiment_label,
+            "tendance dominante des actualités"), unsafe_allow_html=True)
+    with c4:
+        trend = kpis["last_stock_trend_pct"]
+        trend_txt = f"{trend:+.2f}%" if trend is not None else "—"
+        st.markdown(theme.kpi_card(
+            "Tendance boursière", trend_txt,
+            "dernière prévision générée"), unsafe_allow_html=True)
 
-    st.markdown('<div class="panel-label">Profil client — paramètres d\'entrée</div>', unsafe_allow_html=True)
-    with st.container(border=True):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            age = st.number_input("Âge", 18, 100, 35)
-            income = st.number_input("Revenu mensuel ($)", 0, 100000, 4500)
-            debt_ratio = st.slider("Taux d'endettement", 0.0, 1.0, 0.3)
-        with col2:
-            num_credit_lines = st.number_input("Nombre de lignes de crédit", 0, 40, 5)
-            num_dependents = st.number_input("Personnes à charge", 0, 10, 1)
-            revolving_util = st.slider("Taux d'utilisation renouvelable", 0.0, 1.5, 0.4)
-        with col3:
-            late_30_59 = st.number_input("Retards 30-59j", 0, 20, 0)
-            late_60_89 = st.number_input("Retards 60-89j", 0, 20, 0)
-            late_90 = st.number_input("Retards 90j+", 0, 20, 0)
+    st.markdown("<div style='margin-top:1.6rem;'></div>", unsafe_allow_html=True)
 
-    st.write("")
-    if st.button("Calculer le score de risque", type="primary"):
-        try:
-            from credit_scoring import predict_default_probability
-            client = {
-                "age": age, "MonthlyIncome": income, "DebtRatio": debt_ratio,
-                "NumberOfOpenCreditLinesAndLoans": num_credit_lines,
-                "NumberOfDependents": num_dependents,
-                "NumberOfTime30-59DaysPastDueNotWorse": late_30_59,
-                "NumberOfTime60-89DaysPastDueNotWorse": late_60_89,
-                "NumberOfTimes90DaysLate": late_90,
-                "RevolvingUtilizationOfUnsecuredLines": revolving_util,
-            }
-            proba = predict_default_probability(client)
-            risk_pct = proba * 100
+    left, right = st.columns([2.1, 1])
 
-            fig = go.Figure(go.Indicator(
-                mode="gauge+number", value=risk_pct,
-                number={"suffix": "%", "font": {"family": "IBM Plex Mono, monospace", "size": 40}},
-                title={"text": "PROBABILITÉ DE DÉFAUT", "font": {"family": "IBM Plex Mono, monospace", "size": 13}},
-                gauge={"axis": {"range": [0, 100], "tickcolor": t["text_lo"]},
-                       "bar": {"color": t["bad"] if risk_pct > 50 else t["accent"]},
-                       "bgcolor": t["panel_alt"], "borderwidth": 1, "bordercolor": t["line"],
-                       "steps": [{"range": [0, 30], "color": t["panel_alt"]},
-                                 {"range": [30, 60], "color": t["panel_alt"]},
-                                 {"range": [60, 100], "color": t["panel_alt"]}]},
-            ))
-            fig.update_layout(template=PLOTLY_TEMPLATE, height=320, margin=dict(t=60, b=10, l=30, r=30))
-            st.plotly_chart(fig, use_container_width=True)
+    with left:
+        st.markdown('<div class="section-eyebrow">Modules</div>', unsafe_allow_html=True)
+        modules = [
+            ("Octroi de Crédit", f"{kpis['avg_default_probability']*100:.1f}%",
+             "probabilité moyenne de défaut sur les dossiers analysés"),
+            ("Surveillance des Transactions", f"{kpis['total_fraud_checked']}",
+             "transactions passées au crible depuis 72h"),
+            ("Segmentation Clientèle", f"{kpis['total_customers_segmented']:,}".replace(",", " "),
+             "clients répartis en 4 profils comportementaux"),
+            ("Veille des Marchés", sentiment_label,
+             "sentiment dominant des actualités financières"),
+        ]
+        mcols = st.columns(2)
+        for i, (title, metric, caption) in enumerate(modules):
+            status_html = theme.status_pill("Opérationnel", "ok")
+            with mcols[i % 2]:
+                st.markdown(theme.module_card(title, metric, caption, status_html), unsafe_allow_html=True)
+                st.markdown("<div style='margin-bottom:1rem;'></div>", unsafe_allow_html=True)
 
-            if risk_pct < 30:
-                st.success("Risque faible — crédit recommandé")
-            elif risk_pct < 60:
-                st.warning("Risque modéré — analyse complémentaire recommandée")
-            else:
-                st.error("Risque élevé — crédit déconseillé")
-        except FileNotFoundError:
-            st.error("Modèle non entraîné. Lancez d'abord : `python src/credit_scoring.py`")
+    with right:
+        st.markdown('<div class="section-eyebrow">Notifications</div>', unsafe_allow_html=True)
+        notifs = db.get_notifications(limit=6)
+        if notifs.empty:
+            st.markdown('<div class="section-panel">Aucun événement notable pour le moment.</div>',
+                        unsafe_allow_html=True)
+        else:
+            html = ""
+            for _, row in notifs.iterrows():
+                try:
+                    t = datetime.fromisoformat(row["created_at"]).strftime("%d/%m à %Hh%M")
+                except Exception:
+                    t = ""
+                html += theme.notification_item(row["message"], t, row["severity"])
+            st.markdown(html, unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------------------------
-# PAGE : DÉTECTION DE FRAUDE
+# PAGE : OCTROI DE CRÉDIT
 # ---------------------------------------------------------------------------
-elif page == "Détection de fraude":
-    st.markdown(f'<div class="summary-bar">{ICONS["fraud"]}&nbsp; {"Surveillance transactionnelle active" if fraud_ready else "Surveillance indisponible — modèle non entraîné"}</div>', unsafe_allow_html=True)
+def render_credit_page():
+    theme.page_header("Octroi de Crédit", "Évaluation du risque de défaut et instruction des dossiers",
+                       theme.status_pill("Opérationnel", "ok"))
 
-    st.markdown('<div class="panel-label">Analyse d\'une transaction</div>', unsafe_allow_html=True)
-    st.info("Renseignez le montant et l'heure ; les features V1-V28 sont simulées aléatoirement "
-            "(dans un vrai déploiement, elles proviennent du pipeline de features en amont).")
+    df_hist = db.read_table("credit_applications", limit=1000)
 
-    with st.container(border=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            amount = st.number_input("Montant de la transaction ($)", 0.0, 50000.0, 120.0)
-        with c2:
-            hour = st.slider("Heure de la transaction (0-24h)", 0, 23, 14)
+    tab_summary, tab_explore, tab_action = st.tabs(["Sommaire", "Exploration", "Action"])
 
-    st.write("")
-    if st.button("Analyser la transaction", type="primary"):
-        try:
-            from feature_engineering import engineer_fraud_features
-            model = joblib.load(MODEL_DIR / "fraud_xgboost.joblib")
-            rng = np.random.default_rng(42)
-            v_features = {f"V{i}": rng.normal(0, 1) for i in range(1, 29)}
-            transaction = {**v_features, "Amount": amount, "Time": hour * 3600}
-            df_tx = engineer_fraud_features(pd.DataFrame([transaction]))
-            df_tx = df_tx[model.get_booster().feature_names]
-            proba = model.predict_proba(df_tx)[:, 1][0]
+    with tab_summary:
+        c1, c2, c3 = st.columns(3)
+        avg_p = df_hist["default_probability"].mean() * 100 if not df_hist.empty else 0
+        n_high = (df_hist["risk_level"] == "high").sum() if not df_hist.empty else 0
+        n_pending = (df_hist["status"] == "en_attente").sum() if not df_hist.empty else 0
+        c1.markdown(theme.kpi_card("Probabilité moyenne de défaut", f"{avg_p:.1f}%", "sur 1000 derniers dossiers"),
+                    unsafe_allow_html=True)
+        c2.markdown(theme.kpi_card("Dossiers à risque élevé", f"{n_high}", "nécessitent une analyse manuelle"),
+                    unsafe_allow_html=True)
+        c3.markdown(theme.kpi_card("En attente d'instruction", f"{n_pending}", "à traiter"),
+                    unsafe_allow_html=True)
 
-            st.metric("Probabilité de fraude", f"{proba*100:.2f}%")
-            if proba > 0.5:
-                st.error("Transaction suspecte — vérification manuelle recommandée")
-            else:
-                st.success("Transaction jugée légitime")
-        except FileNotFoundError:
-            st.error("Modèle non entraîné. Lancez d'abord : `python src/fraud_detection.py`")
+        st.markdown("<div style='margin-top:1.3rem;'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="section-eyebrow">Nouvelle évaluation</div>', unsafe_allow_html=True)
+
+        with st.container():
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                age = st.number_input("Âge", 18, 100, 35)
+                income = st.number_input("Revenu mensuel (MAD)", 0, 100000, 4500)
+                debt_ratio = st.slider("Taux d'endettement", 0.0, 1.0, 0.3)
+            with col2:
+                num_credit_lines = st.number_input("Nombre de lignes de crédit", 0, 40, 5)
+                num_dependents = st.number_input("Personnes à charge", 0, 10, 1)
+                revolving_util = st.slider("Taux d'utilisation renouvelable", 0.0, 1.5, 0.4)
+            with col3:
+                late_30_59 = st.number_input("Retards 30-59 jours", 0, 20, 0)
+                late_60_89 = st.number_input("Retards 60-89 jours", 0, 20, 0)
+                late_90 = st.number_input("Retards 90 jours et plus", 0, 20, 0)
+
+            if st.button("Évaluer le dossier", type="primary"):
+                try:
+                    from credit_scoring import predict_default_probability
+                    client = {
+                        "age": age, "MonthlyIncome": income, "DebtRatio": debt_ratio,
+                        "NumberOfOpenCreditLinesAndLoans": num_credit_lines,
+                        "NumberOfDependents": num_dependents,
+                        "NumberOfTime30-59DaysPastDueNotWorse": late_30_59,
+                        "NumberOfTime60-89DaysPastDueNotWorse": late_60_89,
+                        "NumberOfTimes90DaysLate": late_90,
+                        "RevolvingUtilizationOfUnsecuredLines": revolving_util,
+                    }
+                    proba = predict_default_probability(client)
+                    risk_level = "low" if proba < 0.3 else "medium" if proba < 0.6 else "high"
+                    db.log_credit_application(client, proba, risk_level)
+
+                    risk_pct = proba * 100
+                    gc1, gc2 = st.columns([1, 1.4])
+                    with gc1:
+                        fig = go.Figure(go.Indicator(
+                            mode="gauge+number", value=risk_pct,
+                            title={"text": "Probabilité de défaut (%)"},
+                            gauge={"axis": {"range": [0, 100]},
+                                   "bar": {"color": P["critical"] if risk_pct > 50 else P["success"]},
+                                   "bgcolor": P["panel"],
+                                   "steps": [{"range": [0, 30], "color": P["accent_soft"]},
+                                             {"range": [30, 60], "color": P["warning"]},
+                                             {"range": [60, 100], "color": P["critical"]}]},
+                        ))
+                        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color=P["text_primary"], height=260)
+                        st.plotly_chart(fig, use_container_width=True)
+                    with gc2:
+                        if risk_pct < 30:
+                            st.markdown(theme.status_pill("Risque faible — crédit recommandé", "ok"),
+                                        unsafe_allow_html=True)
+                        elif risk_pct < 60:
+                            st.markdown(theme.status_pill("Risque modéré — analyse complémentaire", "warning"),
+                                        unsafe_allow_html=True)
+                        else:
+                            st.markdown(theme.status_pill("Risque élevé — crédit déconseillé", "critical"),
+                                        unsafe_allow_html=True)
+                        st.write("")
+                        st.caption("Ce dossier a été enregistré dans l'historique des instructions.")
+                except FileNotFoundError:
+                    st.error("Modèle non entraîné. Lancez : `python src/credit_scoring.py`")
+
+    with tab_explore:
+        if df_hist.empty:
+            st.info("Aucune donnée disponible pour l'exploration.")
+        else:
+            c1, c2 = st.columns(2)
+            with c1:
+                fig = px.histogram(df_hist, x="default_probability", nbins=25,
+                                    title="Distribution des probabilités de défaut",
+                                    color_discrete_sequence=[P["accent"]])
+                fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                   font_color=P["text_secondary"])
+                st.plotly_chart(fig, use_container_width=True)
+            with c2:
+                risk_counts = df_hist["risk_level"].value_counts().rename(
+                    index={"low": "Faible", "medium": "Modéré", "high": "Élevé"})
+                fig2 = px.pie(values=risk_counts.values, names=risk_counts.index,
+                              title="Répartition par niveau de risque",
+                              color_discrete_sequence=[P["success"], P["warning"], P["critical"]])
+                fig2.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color=P["text_secondary"])
+                st.plotly_chart(fig2, use_container_width=True)
+
+            fig3 = px.scatter(df_hist, x="monthly_income", y="debt_ratio", color="risk_level",
+                               title="Revenu vs Taux d'endettement",
+                               color_discrete_map={"low": P["success"], "medium": P["warning"], "high": P["critical"]})
+            fig3.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                font_color=P["text_secondary"])
+            st.plotly_chart(fig3, use_container_width=True)
+
+    with tab_action:
+        if df_hist.empty:
+            st.info("Aucun dossier à traiter.")
+        else:
+            st.markdown('<div class="section-eyebrow">Dossiers en attente d\'instruction</div>',
+                        unsafe_allow_html=True)
+            pending = df_hist[df_hist["status"] == "en_attente"].copy()
+            display_cols = ["id", "created_at", "age", "monthly_income", "debt_ratio",
+                             "default_probability", "risk_level"]
+            st.dataframe(pending[display_cols].rename(columns={
+                "id": "N° dossier", "created_at": "Date", "age": "Âge",
+                "monthly_income": "Revenu", "debt_ratio": "Endettement",
+                "default_probability": "Prob. défaut", "risk_level": "Risque",
+            }), use_container_width=True, height=320)
+
+            csv = pending[display_cols].to_csv(index=False).encode("utf-8")
+            st.download_button("Exporter en CSV", csv, "dossiers_credit_en_attente.csv", "text/csv")
+
 
 # ---------------------------------------------------------------------------
-# PAGE : SEGMENTATION CLIENTS
+# PAGE : SURVEILLANCE DES TRANSACTIONS
 # ---------------------------------------------------------------------------
-elif page == "Segmentation clients":
-    st.markdown(f'<div class="summary-bar">{ICONS["cluster"]}&nbsp; {cluster_metric} — {cluster_sub}</div>', unsafe_allow_html=True)
+def render_fraud_page():
+    theme.page_header("Surveillance des Transactions", "Détection des transactions frauduleuses en temps réel",
+                       theme.status_pill("Opérationnel", "ok"))
 
-    if seg_path.exists():
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            with st.container(border=True):
-                st.metric("Total clients", len(_df_seg))
-                counts = _df_seg["segment_name"].value_counts()
-                for seg, n in counts.items():
-                    st.write(f"**{seg}** — {n} clients ({n/len(_df_seg)*100:.1f}%)")
-        with c2:
-            fig = px.pie(_df_seg, names="segment_name", title="Répartition des segments", hole=0.55)
-            fig.update_layout(template=PLOTLY_TEMPLATE, height=340, margin=dict(t=50, b=10, l=10, r=10))
-            st.plotly_chart(fig, use_container_width=True)
+    df_hist = db.read_table("fraud_alerts", limit=1000)
 
-        fig2 = px.scatter(
-            _df_seg, x="annual_income", y="balance", color="segment_name",
-            size="spending_score", hover_data=["age", "tenure_years"],
-            title="Segments clients (revenu vs solde bancaire)",
-        )
-        fig2.update_layout(template=PLOTLY_TEMPLATE, height=440, margin=dict(t=50, b=30, l=40, r=20))
-        st.plotly_chart(fig2, use_container_width=True)
-    else:
-        st.error("Segmentation non calculée. Lancez d'abord : `python src/clustering.py`")
+    tab_summary, tab_explore, tab_action = st.tabs(["Sommaire", "Exploration", "Action"])
+
+    with tab_summary:
+        c1, c2, c3 = st.columns(3)
+        n_total = len(df_hist)
+        n_suspicious = int(df_hist["is_suspicious"].sum()) if not df_hist.empty else 0
+        n_critical_new = int(((df_hist["is_suspicious"] == 1) & (df_hist["status"] == "nouvelle")).sum()) if not df_hist.empty else 0
+        c1.markdown(theme.kpi_card("Transactions analysées", f"{n_total}", "dernières 72h"), unsafe_allow_html=True)
+        c2.markdown(theme.kpi_card("Transactions suspectes", f"{n_suspicious}", "signalées par le modèle"),
+                    unsafe_allow_html=True)
+        c3.markdown(theme.kpi_card("Alertes critiques non vérifiées", f"{n_critical_new}", "action requise"),
+                    unsafe_allow_html=True)
+
+        st.markdown("<div style='margin-top:1.3rem;'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="section-eyebrow">Analyser une transaction</div>', unsafe_allow_html=True)
+
+        amount = st.number_input("Montant de la transaction (MAD)", 0.0, 50000.0, 120.0)
+        hour = st.slider("Heure de la transaction", 0, 23, 14)
+
+        if st.button("Analyser la transaction", type="primary"):
+            try:
+                from feature_engineering import engineer_fraud_features
+                model = joblib.load(MODEL_DIR / "fraud_xgboost.joblib")
+                rng = np.random.default_rng(42)
+                v_features = {f"V{i}": rng.normal(0, 1) for i in range(1, 29)}
+                transaction = {**v_features, "Amount": amount, "Time": hour * 3600}
+                df_tx = engineer_fraud_features(pd.DataFrame([transaction]))
+                df_tx = df_tx[model.get_booster().feature_names]
+                proba = float(model.predict_proba(df_tx)[:, 1][0])
+                is_suspicious = proba > 0.5
+                db.log_fraud_alert(amount, hour, proba, is_suspicious)
+
+                gc1, gc2 = st.columns([1, 2])
+                gc1.metric("Probabilité de fraude", f"{proba*100:.2f}%")
+                with gc2:
+                    if is_suspicious:
+                        st.markdown(theme.status_pill("Transaction suspecte — vérification requise", "critical"),
+                                    unsafe_allow_html=True)
+                    else:
+                        st.markdown(theme.status_pill("Transaction légitime", "ok"), unsafe_allow_html=True)
+            except FileNotFoundError:
+                st.error("Modèle non entraîné. Lancez : `python src/fraud_detection.py`")
+
+    with tab_explore:
+        if df_hist.empty:
+            st.info("Aucune donnée disponible.")
+        else:
+            c1, c2 = st.columns(2)
+            with c1:
+                fig = px.histogram(df_hist, x="hour_of_day", color="is_suspicious",
+                                    title="Transactions par heure de la journée", nbins=24,
+                                    color_discrete_map={0: P["accent"], 1: P["critical"]})
+                fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                   font_color=P["text_secondary"])
+                st.plotly_chart(fig, use_container_width=True)
+            with c2:
+                fig2 = px.box(df_hist, x="is_suspicious", y="amount",
+                               title="Montant par statut de suspicion",
+                               color="is_suspicious",
+                               color_discrete_map={0: P["accent"], 1: P["critical"]})
+                fig2.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                    font_color=P["text_secondary"])
+                st.plotly_chart(fig2, use_container_width=True)
+
+    with tab_action:
+        if df_hist.empty:
+            st.info("Aucune alerte à traiter.")
+        else:
+            st.markdown('<div class="section-eyebrow">Alertes critiques à vérifier</div>', unsafe_allow_html=True)
+            critical = df_hist[(df_hist["is_suspicious"] == 1) & (df_hist["status"] == "nouvelle")].copy()
+            display_cols = ["id", "created_at", "amount", "hour_of_day", "fraud_probability"]
+            st.dataframe(critical[display_cols].rename(columns={
+                "id": "N° alerte", "created_at": "Date", "amount": "Montant",
+                "hour_of_day": "Heure", "fraud_probability": "Prob. fraude",
+            }), use_container_width=True, height=300)
+
+            csv = critical[display_cols].to_csv(index=False).encode("utf-8")
+            st.download_button("Exporter en CSV", csv, "alertes_fraude_critiques.csv", "text/csv")
+
 
 # ---------------------------------------------------------------------------
-# PAGE : SENTIMENT FINANCIER
+# PAGE : SEGMENTATION CLIENTÈLE (avec carte)
 # ---------------------------------------------------------------------------
-elif page == "Sentiment financier":
-    st.markdown(f'<div class="summary-bar">{ICONS["nlp"]}&nbsp; {"Moteur de lecture des actualités prêt" if nlp_ready else "Moteur indisponible — modèle non entraîné"}</div>', unsafe_allow_html=True)
+def render_segmentation_page():
+    theme.page_header("Segmentation Clientèle", "Cartographie et profils comportementaux de la clientèle",
+                       theme.status_pill("Opérationnel", "ok"))
 
-    st.markdown('<div class="panel-label">Analyse de sentiment — actualité financière</div>', unsafe_allow_html=True)
-    with st.container(border=True):
-        text = st.text_area("Collez un titre ou un extrait d'actualité financière",
+    df_seg = db.read_table("customer_segments", limit=6000)
+
+    tab_summary, tab_map, tab_action = st.tabs(["Sommaire", "Carte", "Action"])
+
+    with tab_summary:
+        if df_seg.empty:
+            st.info("Segmentation non calculée. Lancez : `python src/clustering.py`")
+        else:
+            counts = df_seg["segment_name"].value_counts()
+            cols = st.columns(len(counts))
+            for col, (seg, n) in zip(cols, counts.items()):
+                col.markdown(theme.kpi_card(seg, f"{n:,}".replace(",", " "),
+                                             f"{n/len(df_seg)*100:.1f}% de la base"), unsafe_allow_html=True)
+
+            st.markdown("<div style='margin-top:1.3rem;'></div>", unsafe_allow_html=True)
+            c1, c2 = st.columns(2)
+            with c1:
+                fig = px.pie(df_seg, names="segment_name", title="Répartition des segments",
+                             color_discrete_sequence=[P["accent"], P["accent_light"], P["warning"], P["critical"]])
+                fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color=P["text_secondary"])
+                st.plotly_chart(fig, use_container_width=True)
+            with c2:
+                fig2 = px.scatter(df_seg, x="annual_income", y="balance", color="segment_name",
+                                   size="spending_score", title="Revenu vs Solde bancaire",
+                                   opacity=0.6)
+                fig2.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                    font_color=P["text_secondary"])
+                st.plotly_chart(fig2, use_container_width=True)
+
+    with tab_map:
+        if df_seg.empty:
+            st.info("Segmentation non calculée.")
+        else:
+            st.markdown('<div class="section-eyebrow">Répartition géographique de la clientèle</div>',
+                        unsafe_allow_html=True)
+            segment_filter = st.multiselect("Filtrer par segment", options=sorted(df_seg["segment_name"].unique()),
+                                             default=sorted(df_seg["segment_name"].unique()))
+            df_map = df_seg[df_seg["segment_name"].isin(segment_filter)]
+
+            df_map = df_map.copy()
+            df_map["marker_size"] = df_map["balance"].clip(lower=0) + 500  # taille toujours positive pour la carte
+
+            map_style = "carto-darkmatter" if st.session_state.theme_mode == "dark" else "carto-positron"
+            fig_map = px.scatter_map(
+                df_map, lat="latitude", lon="longitude", color="segment_name",
+                size="marker_size", size_max=16, zoom=4.6, height=560,
+                hover_name="customer_id",
+                hover_data={"city": True, "annual_income": True, "spending_score": True,
+                            "balance": True, "marker_size": False, "latitude": False, "longitude": False},
+                map_style=map_style,
+                color_discrete_sequence=[P["accent_light"], P["success"], P["warning"], P["critical"]],
+            )
+            fig_map.update_layout(paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=0, b=0),
+                                   legend=dict(bgcolor="rgba(0,0,0,0)", font_color=P["text_primary"]))
+            st.plotly_chart(fig_map, use_container_width=True)
+
+            st.markdown('<div class="section-eyebrow" style="margin-top:1rem;">Répartition par ville</div>',
+                        unsafe_allow_html=True)
+            city_seg = df_map.groupby(["city", "segment_name"]).size().reset_index(name="clients")
+            fig_bar = px.bar(city_seg, x="city", y="clients", color="segment_name", barmode="stack")
+            fig_bar.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                   font_color=P["text_secondary"])
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+    with tab_action:
+        if df_seg.empty:
+            st.info("Aucune donnée à exporter.")
+        else:
+            st.markdown('<div class="section-eyebrow">Export de la base client segmentée</div>',
+                        unsafe_allow_html=True)
+            st.dataframe(df_seg.head(200), use_container_width=True, height=320)
+            csv = df_seg.to_csv(index=False).encode("utf-8")
+            st.download_button("Exporter la segmentation en CSV", csv, "segmentation_clientele.csv", "text/csv")
+
+
+# ---------------------------------------------------------------------------
+# PAGE : VEILLE DES MARCHÉS (NLP Sentiment)
+# ---------------------------------------------------------------------------
+def render_sentiment_page():
+    theme.page_header("Veille des Marchés", "Analyse de sentiment des actualités financières",
+                       theme.status_pill("Opérationnel", "ok"))
+
+    df_hist = db.read_table("sentiment_log", limit=500)
+
+    tab_summary, tab_explore, tab_action = st.tabs(["Sommaire", "Exploration", "Action"])
+
+    with tab_summary:
+        if not df_hist.empty:
+            counts = df_hist["sentiment"].value_counts()
+            labels_map = {"positive": "Favorable", "negative": "Défavorable", "neutral": "Neutre"}
+            c1, c2, c3 = st.columns(3)
+            for col, key in zip([c1, c2, c3], ["positive", "negative", "neutral"]):
+                n = int(counts.get(key, 0))
+                col.markdown(theme.kpi_card(labels_map[key], f"{n}", "articles analysés"), unsafe_allow_html=True)
+
+        st.markdown("<div style='margin-top:1.3rem;'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="section-eyebrow">Analyser une actualité</div>', unsafe_allow_html=True)
+        text = st.text_area("Titre ou extrait d'actualité financière",
                              "Company Alpha Corp reports record profits this quarter")
 
-    st.write("")
-    if st.button("Analyser le sentiment", type="primary"):
-        try:
-            from nlp_sentiment import predict_sentiment_baseline
-            sentiment = predict_sentiment_baseline(text)
-            color = {"positive": t["ok"], "negative": t["bad"], "neutral": t["text_lo"]}[sentiment]
-            st.markdown(
-                f"""<div class="kpi-card" style="max-width:320px;">
-                <div class="kpi-name">Sentiment détecté</div>
-                <div style="font-family:'IBM Plex Mono',monospace; font-size:1.3rem; color:{color}; margin-top:8px;">
-                {sentiment.upper()}</div></div>""",
-                unsafe_allow_html=True,
-            )
-        except FileNotFoundError:
-            st.error("Modèle non entraîné. Lancez d'abord : `python src/nlp_sentiment.py`")
-
-# ---------------------------------------------------------------------------
-# PAGE : PRÉVISION BOURSIÈRE
-# ---------------------------------------------------------------------------
-elif page == "Prévision boursière":
-    st.markdown(f'<div class="summary-bar">{ICONS["stock"]}&nbsp; {lstm_metric} — {lstm_sub}</div>', unsafe_allow_html=True)
-
-    if stock_path.exists():
-        fig = px.line(_df_stock, x="Date", y="Close", title="Historique du cours de clôture")
-        fig.update_traces(line_color=t["accent"])
-        fig.update_layout(template=PLOTLY_TEMPLATE, height=360, margin=dict(t=50, b=30, l=40, r=20))
-        st.plotly_chart(fig, use_container_width=True)
-
-        with st.container(border=True):
-            n_days = st.slider("Nombre de jours à prévoir", 1, 15, 5)
-            generate_forecast = st.button("Générer la prévision", type="primary")
-
-        if generate_forecast:
+        if st.button("Analyser le sentiment", type="primary"):
             try:
-                import torch
-                from time_series_lstm import LSTMForecaster, forecast_next_days, WINDOW_SIZE
-
-                scaler = joblib.load(MODEL_DIR / "lstm_scaler.joblib")
-                model = LSTMForecaster()
-                model.load_state_dict(torch.load(MODEL_DIR / "lstm_stock_forecaster.pt"))
-
-                last_window = _df_stock["Close"].values[-WINDOW_SIZE:]
-                preds = forecast_next_days(model, scaler, last_window, n_days=n_days)
-
-                future_dates = pd.bdate_range(
-                    start=_df_stock["Date"].iloc[-1] + pd.Timedelta(days=1), periods=n_days
-                )
-                forecast_df = pd.DataFrame({"Date": future_dates, "Close": preds})
-
-                fig2 = go.Figure()
-                fig2.add_trace(go.Scatter(x=_df_stock["Date"].tail(60), y=_df_stock["Close"].tail(60),
-                                           name="Historique", mode="lines", line=dict(color=t["text_lo"])))
-                fig2.add_trace(go.Scatter(x=forecast_df["Date"], y=forecast_df["Close"],
-                                           name="Prévision", mode="lines+markers",
-                                           line=dict(dash="dash", color=t["accent"])))
-                fig2.update_layout(template=PLOTLY_TEMPLATE, height=400, margin=dict(t=30, b=30, l=40, r=20))
-                st.plotly_chart(fig2, use_container_width=True)
-                st.dataframe(forecast_df, use_container_width=True)
+                from nlp_sentiment import predict_sentiment_baseline
+                sentiment = predict_sentiment_baseline(text)
+                db.log_sentiment(text, sentiment)
+                label = {"positive": "Favorable", "negative": "Défavorable", "neutral": "Neutre"}[sentiment]
+                level = {"positive": "ok", "negative": "critical", "neutral": "warning"}[sentiment]
+                st.markdown(theme.status_pill(f"Sentiment détecté — {label}", level), unsafe_allow_html=True)
             except FileNotFoundError:
-                st.error("Modèle LSTM non entraîné. Lancez d'abord : `python src/time_series_lstm.py`")
-    else:
-        st.error("Données boursières manquantes. Lancez d'abord : `python src/data_generation.py`")
+                st.error("Modèle non entraîné. Lancez : `python src/nlp_sentiment.py`")
+
+    with tab_explore:
+        if df_hist.empty:
+            st.info("Aucune donnée disponible.")
+        else:
+            fig = px.histogram(df_hist, x="sentiment", title="Distribution des sentiments analysés",
+                                color="sentiment",
+                                color_discrete_map={"positive": P["success"], "negative": P["critical"],
+                                                     "neutral": P["warning"]})
+            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                               font_color=P["text_secondary"])
+            st.plotly_chart(fig, use_container_width=True)
+
+    with tab_action:
+        if df_hist.empty:
+            st.info("Aucun historique à exporter.")
+        else:
+            st.dataframe(df_hist, use_container_width=True, height=320)
+            csv = df_hist.to_csv(index=False).encode("utf-8")
+            st.download_button("Exporter l'historique en CSV", csv, "historique_sentiment.csv", "text/csv")
+
+
+# ---------------------------------------------------------------------------
+# PAGE : PRÉVISION FINANCIÈRE (LSTM boursier)
+# ---------------------------------------------------------------------------
+def render_stock_page():
+    theme.page_header("Prévision Financière", "Anticipation des cours boursiers et de la volatilité",
+                       theme.status_pill("Opérationnel", "ok"))
+
+    stock_path = DATA_DIR / "stock_prices.csv"
+    df_forecasts = db.read_table("stock_forecasts", limit=200)
+
+    tab_summary, tab_explore, tab_action = st.tabs(["Sommaire", "Exploration", "Action"])
+
+    with tab_summary:
+        if not df_forecasts.empty:
+            last = df_forecasts.iloc[0]
+            c1, c2, c3 = st.columns(3)
+            c1.markdown(theme.kpi_card("Dernier cours de référence", f"{last['last_close']:.2f}", "MAD"),
+                        unsafe_allow_html=True)
+            c2.markdown(theme.kpi_card("Prévision", f"{last['forecast_close']:.2f}", "MAD"),
+                        unsafe_allow_html=True)
+            trend_sign = "+" if last["trend_pct"] >= 0 else ""
+            c3.markdown(theme.kpi_card("Tendance anticipée", f"{trend_sign}{last['trend_pct']:.2f}%",
+                                        f"sur {int(last['horizon_days'])} jour(s)"), unsafe_allow_html=True)
+
+        st.markdown("<div style='margin-top:1.3rem;'></div>", unsafe_allow_html=True)
+        if stock_path.exists():
+            df_stock = pd.read_csv(stock_path, parse_dates=["Date"])
+            n_days = st.slider("Horizon de prévision (jours)", 1, 15, 5)
+            if st.button("Générer la prévision", type="primary"):
+                try:
+                    import torch
+                    from time_series_lstm import LSTMForecaster, forecast_next_days, WINDOW_SIZE
+
+                    scaler = joblib.load(MODEL_DIR / "lstm_scaler.joblib")
+                    model = LSTMForecaster()
+                    model.load_state_dict(torch.load(MODEL_DIR / "lstm_stock_forecaster.pt"))
+
+                    last_window = df_stock["Close"].values[-WINDOW_SIZE:]
+                    preds = forecast_next_days(model, scaler, last_window, n_days=n_days)
+                    db.log_stock_forecast(n_days, float(df_stock["Close"].iloc[-1]), float(preds[-1]))
+
+                    future_dates = pd.bdate_range(
+                        start=df_stock["Date"].iloc[-1] + pd.Timedelta(days=1), periods=n_days)
+                    forecast_df = pd.DataFrame({"Date": future_dates, "Close": preds})
+
+                    fig2 = go.Figure()
+                    fig2.add_trace(go.Scatter(x=df_stock["Date"].tail(60), y=df_stock["Close"].tail(60),
+                                               name="Historique", mode="lines", line=dict(color=P["accent"])))
+                    fig2.add_trace(go.Scatter(x=forecast_df["Date"], y=forecast_df["Close"],
+                                               name="Prévision", mode="lines+markers",
+                                               line=dict(dash="dash", color=P["warning"])))
+                    fig2.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                        font_color=P["text_secondary"])
+                    st.plotly_chart(fig2, use_container_width=True)
+                    st.dataframe(forecast_df, use_container_width=True)
+                except FileNotFoundError:
+                    st.error("Modèle LSTM non entraîné. Lancez : `python src/time_series_lstm.py`")
+        else:
+            st.info("Données boursières manquantes. Lancez : `python src/data_generation.py`")
+
+    with tab_explore:
+        if stock_path.exists():
+            df_stock = pd.read_csv(stock_path, parse_dates=["Date"])
+            fig = px.line(df_stock, x="Date", y="Close", title="Historique du cours de clôture")
+            fig.update_traces(line_color=P["accent_light"])
+            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                               font_color=P["text_secondary"])
+            st.plotly_chart(fig, use_container_width=True)
+
+            df_stock["daily_return"] = df_stock["Close"].pct_change()
+            fig2 = px.histogram(df_stock, x="daily_return", nbins=50, title="Distribution des rendements journaliers")
+            fig2.update_traces(marker_color=P["accent"])
+            fig2.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                font_color=P["text_secondary"])
+            st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.info("Aucune donnée disponible.")
+
+    with tab_action:
+        if df_forecasts.empty:
+            st.info("Aucune prévision enregistrée.")
+        else:
+            st.dataframe(df_forecasts, use_container_width=True, height=320)
+            csv = df_forecasts.to_csv(index=False).encode("utf-8")
+            st.download_button("Exporter les prévisions en CSV", csv, "previsions_boursieres.csv", "text/csv")
+
+
+# ---------------------------------------------------------------------------
+# Routage
+# ---------------------------------------------------------------------------
+PAGES = {
+    "Accueil": render_home,
+    "Octroi de Crédit": render_credit_page,
+    "Surveillance des Transactions": render_fraud_page,
+    "Segmentation Clientèle": render_segmentation_page,
+    "Veille des Marchés": render_sentiment_page,
+    "Prévision Financière": render_stock_page,
+}
+
+PAGES[selected]()

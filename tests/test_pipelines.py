@@ -9,6 +9,7 @@ import data_generation
 import credit_scoring
 import clustering
 import feature_engineering as fe
+import database as db
 
 
 def test_generate_fraud_data_shape():
@@ -80,3 +81,39 @@ def test_woe_iv_returns_positive_iv():
     df = data_generation.generate_credit_scoring_data(n=1000)
     woe_table = fe.compute_woe_iv(df, "DebtRatio", "SeriousDlqin2yrs", bins=8)
     assert woe_table.attrs["total_iv"] >= 0
+
+
+def test_database_init_creates_tables():
+    db.init_db()
+    conn = db.get_connection()
+    tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    conn.close()
+    expected = {"credit_applications", "fraud_alerts", "customer_segments",
+                "sentiment_log", "stock_forecasts"}
+    assert expected.issubset(tables)
+
+
+def test_database_log_and_read_credit_application():
+    db.init_db()
+    client = {
+        "age": 30, "MonthlyIncome": 4000, "DebtRatio": 0.4,
+        "NumberOfOpenCreditLinesAndLoans": 3, "NumberOfDependents": 1,
+        "NumberOfTime30-59DaysPastDueNotWorse": 0,
+        "NumberOfTime60-89DaysPastDueNotWorse": 0,
+        "NumberOfTimes90DaysLate": 0,
+        "RevolvingUtilizationOfUnsecuredLines": 0.3,
+    }
+    db.log_credit_application(client, 0.42, "medium")
+    df = db.read_table("credit_applications", limit=1)
+    assert not df.empty
+    assert df.iloc[0]["risk_level"] == "medium"
+
+
+def test_database_kpis_returns_expected_keys():
+    db.init_db()
+    kpis = db.get_kpis()
+    for key in ["pending_credit_applications", "avg_default_probability",
+                "critical_fraud_alerts", "total_fraud_checked"]:
+        assert key in kpis
