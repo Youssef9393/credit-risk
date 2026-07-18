@@ -5,7 +5,7 @@ An end-to-end intelligent platform integrating **Credit Scoring**, **Fraud Detec
 
 ## Demo Video
 
-## 🗂️ Project Structure
+## Project Structure
 
 ```
 credit-risk-platform/
@@ -108,31 +108,7 @@ Sentiment financier, Prévision boursière.
 ```bash
 uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
 ```
-
 Documentation interactive : http://localhost:8000/docs
-
-### Exemples d'appel
-
-```bash
-curl -X POST http://localhost:8000/predict/credit-scoring \
-  -H "Content-Type: application/json" \
-  -d '{
-    "age": 40, "MonthlyIncome": 4500, "DebtRatio": 0.35,
-    "NumberOfOpenCreditLinesAndLoans": 5, "NumberOfDependents": 2,
-    "NumberOfTime30-59DaysPastDueNotWorse": 1,
-    "NumberOfTime60-89DaysPastDueNotWorse": 0,
-    "NumberOfTimes90DaysLate": 0,
-    "RevolvingUtilizationOfUnsecuredLines": 0.4
-  }'
-
-curl -X POST http://localhost:8000/predict/fraud \
-  -H "Content-Type: application/json" \
-  -d '{"Amount": 250, "Time": 3600}'
-
-curl -X POST http://localhost:8000/predict/sentiment \
-  -H "Content-Type: application/json" \
-  -d '{"text": "Company X reports record profits this quarter"}'
-```
 
 ## 🐳 Conteneurisation Docker
 
@@ -162,7 +138,7 @@ docker build -t credit-risk-dashboard -f Dockerfile.dashboard .
 pytest tests/ -v
 ```
 
-## 🛠️ Stack technique
+## Outils
 
 | Domaine | Outils |
 |---|---|
@@ -196,16 +172,3 @@ gcloud run deploy credit-risk-api \
   --platform managed --region europe-west1 --allow-unauthenticated
 ```
 
-
-
-## Notes importantes
-
-- Les scripts s'exécutent **immédiatement avec des données synthétiques** générées par
-  `src/data_generation.py`, ce qui vous permet de valider toute la chaîne
-  (entraînement → API → dashboard → Docker) sans attendre un téléchargement Kaggle.
-- Une fois les vrais datasets Kaggle téléchargés, remplacez simplement les chemins
-  `DATA_PATH` dans chaque module — l'architecture, les pipelines et les évaluations
-  restent identiques.
-- Les métriques obtenues sur données synthétiques sont volontairement modestes pour
-  le credit scoring (les variables sont faiblement corrélées par construction) ;
-  avec le vrai dataset "Give Me Some Credit", le ROC-AUC dépasse généralement 0.85.
