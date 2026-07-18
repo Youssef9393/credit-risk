@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models
+      - ./data:/app/data
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./models:/app/models
+      - ./data:/app/data
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  mlflow:
+    image: python:3.11-slim
+    working_dir: /app
+    command: >
+      bash -c "pip install --no-cache-dir mlflow==2.8.0 &&
+               mlflow ui --host 0.0.0.0 --port 5000 --backend-store-uri file:///app/mlruns"
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/app/mlruns
+    restart: unless-stopped

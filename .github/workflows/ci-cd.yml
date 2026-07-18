@@ -1,0 +1,71 @@
+name: CI/CD - Credit Risk Platform
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Generate synthetic data (placeholder for real Kaggle data)
+        run: python src/data_generation.py
+
+      - name: Run unit tests
+        run: pytest tests/ -v
+
+      - name: Train models (smoke test)
+        run: |
+          python src/credit_scoring.py
+          python src/nlp_sentiment.py --mode baseline
+
+  build-and-push:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/credit-risk-api:latest
+
+      - name: Build and push Dashboard image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.dashboard
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/credit-risk-dashboard:latest
+
+  # Étape optionnelle : déploiement sur AWS ECS / GCP Cloud Run
+  # deploy:
+  #   needs: build-and-push
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Deploy to AWS ECS
+  #       run: aws ecs update-service --cluster credit-risk --service api --force-new-deployment
